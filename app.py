@@ -1,235 +1,143 @@
-# app.py  — Pro-Max final (Password-protected admin form + demo mode)
-import os
+import requests
+import json
 import base64
-import threading
-import time
 from datetime import datetime
-from flask import Flask, request, render_template, redirect, url_for, jsonify, session, flash
+import time
+from threading import Thread
+from flask import Flask, render_template_string, request
 
-# Crypto (for encrypt/decrypt helpers)
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
+app = Flask(__name__)
 
-# ---------------- Config ----------------
-APP_SECRET = os.environ.get("APP_SECRET", "pro-e2ee-secret")   # change in production
-PORT = int(os.environ.get("PORT", 5000))
-
-# ---------------- App init ----------------
-app = Flask(__name__, template_folder="templates", static_folder="static")
-app.secret_key = APP_SECRET
-app.config['UPLOAD_FOLDER'] = 'messages'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
-# ---------------- State & Logging ----------------
+# Global variable to control message sending status
 sending = False
-sender_thread = None
-log_lines = []
 
-def log(msg):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[{ts}] {msg}"
-    print(entry)
-    log_lines.append(entry)
-    if len(log_lines) > 500:
-        del log_lines[0]
+# Function to convert plain text encryption key to base64 with padding
+def convert_to_base64_with_padding(plain_key):
+    key_bytes = plain_key.encode('utf-8')
+    base64_key = base64.b64encode(key_bytes).decode('utf-8')
+    padding = len(base64_key) % 4
+    if padding != 0:
+        base64_key += '=' * (4 - padding)
+    return base64_key
 
-# ---------------- Crypto helpers ----------------
-def b64_decode_padded(s: str) -> bytes:
-    s = (s or "").strip()
-    pad = len(s) % 4
-    if pad != 0:
-        s += '=' * (4 - pad)
-    return base64.b64decode(s)
+# Function to encrypt the message using the E2EE encryption key
+def encrypt_message(message, encryption_key):
+    encryption_key = convert_to_base64_with_padding(encryption_key)
+    key_bytes = base64.b64decode(encryption_key)
+    encrypted_message = base64.b64encode(message.encode('utf-8'))
+    return encrypted_message
 
-def b64_encode(b: bytes) -> str:
-    return base64.b64encode(b).decode('utf-8')
+# Function to send the encrypted message
+def send_e2ee_message(token, thread_id, encrypted_message, encryption_key, hatersname, time_to_send):
+    url = f"https://www.facebook.com/messages/e2ee/t/{thread_id}"  
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json',
+    }
+    data = {
+        'message': encrypted_message.decode('utf-8'),
+        'thread_id': thread_id,
+        'encryption_key': encryption_key,
+        'hatersname': hatersname,
+        'time_to_send': time_to_send,
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    if response.status_code == 200:
+        print("Message sent successfully!")
+    else:
+        print(f"Error: {response.status_code} - {response.text}")
 
-def encrypt_aes_gcm(plaintext: str, key_b64: str) -> str:
-    key = b64_decode_padded(key_b64)
-    if len(key) not in (16,24,32):
-        raise ValueError("Key must decode to 16/24/32 bytes")
-    nonce = get_random_bytes(12)
-    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-    ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode('utf-8'))
-    return b64_encode(nonce + ciphertext + tag)
-
-def decrypt_aes_gcm(blob_b64: str, key_b64: str) -> str:
-    blob = b64_decode_padded(blob_b64)
-    key = b64_decode_padded(key_b64)
-    nonce = blob[:12]
-    tag = blob[-16:]
-    ciphertext = blob[12:-16]
-    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-    return cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', errors='replace')
-
-# ---------------- Placeholder send function ----------------
-def send_to_uid(uid: str, message: str, key_b64: str, target_type: str, demo_webhook: str = None):
-    """
-    PLACEHOLDER:
-    - For demo_mode (demo_webhook provided): POST encrypted payload to demo webhook (app's /receive).
-    - For production you MUST replace this function with your own implementation that:
-      * Uses only legally obtained keys/sessions
-      * Follows platform rules
-      * Implements exact encryption format + headers + cookies required by target service
-    """
-    if demo_webhook:
-        import requests
-        try:
-            if key_b64:
-                payload = encrypt_aes_gcm(message, key_b64)
-            else:
-                tmp_key = b64_encode(get_random_bytes(32))
-                payload = encrypt_aes_gcm(message, tmp_key)
-            data = {"target_type": target_type, "uid": uid, "payload": payload, "ts": datetime.utcnow().isoformat()+"Z"}
-            r = requests.post(demo_webhook, json=data, timeout=8)
-            return (r.status_code, r.text[:500])
-        except Exception as e:
-            return (0, f"demo post error: {e}")
-
-    # Production path intentionally not implemented to avoid misuse
-    log(f"[PLACEHOLDER] Would send to {target_type} uid={uid}. Message len={len(message)} Key given={bool(key_b64)}")
-    raise NotImplementedError("Add your own send implementation here - do not use others' keys/accounts.")
-
-# ---------------- Sender loop ----------------
-def sender_loop(group_uids, inbox_uids, message, key_b64, interval, start_ts, demo_mode=True):
+# Function to send messages at intervals
+def send_message_at_intervals(message, token, thread_id, encryption_key, hatersname, start_time):
     global sending
-    now = datetime.now()
-    wait = (start_ts - now).total_seconds()
-    if wait > 0:
-        log(f"Waiting {int(wait)}s to start...")
-        time.sleep(wait)
-    log(f"Sender started: groups={len(group_uids)} inbox={len(inbox_uids)} interval={interval}s demo={demo_mode}")
-    demo_webhook = url_for('receive', _external=True) if demo_mode else None
+    current_time = datetime.now()
+    time_difference = (start_time - current_time).total_seconds()
 
+    if time_difference > 0:
+        print(f"Waiting for {time_difference} seconds to start...")
+        time.sleep(time_difference)  # Wait till the set time
+    
+    sending = True  # Start sending messages
     while sending:
-        # Groups
-        for uid in group_uids:
-            if not sending: break
-            uid = uid.strip()
-            if not uid: continue
-            try:
-                status, info = send_to_uid(uid, message, key_b64, target_type='group', demo_webhook=demo_webhook)
-                log(f"Group {uid} -> status={status} info={str(info)[:150]}")
-            except NotImplementedError as e:
-                log(str(e))
-                sending = False
-                break
-            except Exception as e:
-                log(f"Error sending to group {uid}: {e}")
+        encrypted_message = encrypt_message(message, encryption_key)
+        send_e2ee_message(token, thread_id, encrypted_message, encryption_key, hatersname, start_time)
+        print(f"Message sent at {datetime.now()}")
+        time.sleep(60)  # Send the message every 60 seconds
 
-        # Inboxes
-        for uid in inbox_uids:
-            if not sending: break
-            uid = uid.strip()
-            if not uid: continue
-            try:
-                status, info = send_to_uid(uid, message, key_b64, target_type='inbox', demo_webhook=demo_webhook)
-                log(f"Inbox {uid} -> status={status} info={str(info)[:150]}")
-            except NotImplementedError as e:
-                log(str(e))
-                sending = False
-                break
-            except Exception as e:
-                log(f"Error sending to inbox {uid}: {e}")
+# Home route to show the form
+@app.route('/')
+def home():
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Send E2EE Message</title>
+    </head>
+    <body>
+        <h1>Send E2EE Message</h1>
+        <form action="/send" method="POST" enctype="multipart/form-data">
+            <label for="token">Access Token:</label><br>
+            <input type="text" id="token" name="token" required><br><br>
 
-        # interval
-        slept = 0
-        while sending and slept < max(1, int(interval)):
-            time.sleep(1); slept += 1
-    log("Sender stopped.")
+            <label for="thread_id">Thread ID:</label><br>
+            <input type="text" id="thread_id" name="thread_id" required><br><br>
 
-# ---------------- Routes ----------------
-from flask import url_for
+            <label for="encryption_key">Encryption Key (Plain Text):</label><br>
+            <input type="text" id="encryption_key" name="encryption_key" required><br><br>
 
-@app.route('/start', methods=['POST'])
-def start():
-    global sending, sender_thread
+            <label for="hatersname">Haters Name:</label><br>
+            <input type="text" id="hatersname" name="hatersname" required><br><br>
 
-    if sending:
-        flash("Already running. Stop first.", "error")
-        return redirect(url_for('index.html'))
+            <label for="time_to_send">Time to Send:</label><br>
+            <input type="datetime-local" id="time_to_send" name="time_to_send" required><br><br>
 
-    group_text = request.form.get('group_uids','') or ''
-    inbox_text = request.form.get('inbox_uids','') or ''
-    message = request.form.get('message','') or ''
-    key_b64 = request.form.get('encryption_key','') or ''
-    time_to_send = request.form.get('time_to_send','') or ''
-    interval = int(request.form.get('interval',60))
-    demo_mode_flag = (request.form.get('demo_mode','on') == 'on')
+            <label for="message">Message:</label><br>
+            <textarea id="message" name="message" required></textarea><br><br>
 
-    def parse_lines(s):
-        lines=[]
-        for raw in s.replace(',','\n').splitlines():
-            v = raw.strip()
-            if v:
-                lines.append(v)
-        return lines
+            <label for="message_file">Message File (Optional):</label><br>
+            <input type="file" id="message_file" name="message_file"><br><br>
 
-    group_uids = parse_lines(group_text)
-    inbox_uids = parse_lines(inbox_text)
+            <button type="submit">Send Message</button>
+        </form>
+    </body>
+    </html>
+    ''')
 
-    if not time_to_send:
-        flash("Start time required", "error"); return redirect(url_for('index'))
-    try:
-        start_ts = datetime.strptime(time_to_send, "%Y-%m-%dT%H:%M")
-    except Exception:
-        flash("Invalid time format", "error"); return redirect(url_for('index'))
+@app.route('/send', methods=['POST'])
+def send_message():
+    token = request.form['token']
+    thread_id = request.form['thread_id']
+    encryption_key = request.form['encryption_key']
+    hatersname = request.form['hatersname']
+    time_to_send = request.form['time_to_send']
+    message = request.form['message']
+    message_file = request.files['message_file']  # File upload for messages
 
-    if not message:
-        message = " "
+    # Convert time_to_send to datetime
+    start_time = datetime.strptime(time_to_send, '%Y-%m-%dT%H:%M')
 
-    sending = True
-    sender_thread = threading.Thread(target=sender_loop, args=(group_uids, inbox_uids, message, key_b64, interval, start_ts, demo_mode_flag), daemon=True)
-    sender_thread.start()
-    log("Schedule created.")
-    flash("Schedule created", "success")
-    return redirect(url_for('index'))
+    # Message ko encrypt karo
+    encrypted_message = encrypt_message(message, encryption_key)
 
+    # Agar file upload ki hai toh usse save karo
+    if message_file:
+        message_file.save(f"messages/{message_file.filename}")
+        print(f"Message file {message_file.filename} saved.")
+
+    # Start the message sending process at intervals
+    thread = Thread(target=send_message_at_intervals, args=(message, token, thread_id, encryption_key, hatersname, start_time))
+    thread.start()
+
+    return "Message sending started! It will start at the specified time and continue every 60 seconds."
+
+# Route to stop sending messages
 @app.route('/stop', methods=['POST'])
-def stop():
+def stop_message():
     global sending
-    if not require_login():
-        return redirect(url_for('login'))
-    if not sending:
-        flash("Not running", "error"); return redirect(url_for('index'))
     sending = False
-    log("Stop requested.")
-    flash("Stop requested", "success")
-    return redirect(url_for('index'))
-
-@app.route('/status')
-def status():
-    if not require_login():
-        return jsonify({"error":"not auth"}), 401
-    return jsonify({"sending": sending, "log": log_lines[-160:]})
-
-@app.route('/receive', methods=['POST'])
-def receive():
-    # Demo receiver — logs incoming demo payloads
-    data = request.get_json() or {}
-    log(f"/receive got: keys={list(data.keys())} size={len(str(data))}")
-    return jsonify({"ok": True, "received": True})
-
-@app.route('/decrypt', methods=['GET','POST'])
-def decrypt_page():
-    if not require_login():
-        return redirect(url_for('login'))
-    result=None; error=None
-    if request.method=='POST':
-        blob = (request.form.get('payload') or "").strip()
-        key = (request.form.get('encryption_key') or "").strip()
-        try:
-            plaintext = decrypt_aes_gcm(blob, key)
-            result = plaintext
-            log("Decryption succeeded via UI.")
-        except Exception as e:
-            error=str(e); log(f"Decrypt error: {error}")
-    return render_template('decrypt.html', result=result, error=error)
-
-# ---------------- Login template route helper ----------------
-@app.route('/index.html')
-def login_template():
-    return render_template('index.html')
+    return "Message sending stopped!"
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=PORT)
+    app.run(debug=True, host="0.0.0.0", port=5000)
