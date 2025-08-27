@@ -147,7 +147,7 @@ def start():
 
     if sending:
         flash("Already running. Stop first.", "error")
-        return redirect(url_for('index'))
+        return redirect(url_for('index.html'))
 
     group_text = request.form.get('group_uids','') or ''
     inbox_text = request.form.get('inbox_uids','') or ''
@@ -227,9 +227,9 @@ def decrypt_page():
     return render_template('decrypt.html', result=result, error=error)
 
 # ---------------- Login template route helper ----------------
-@app.route('/login.html')
+@app.route('/index.html')
 def login_template():
-    return render_template('login.html')
+    return render_template('index.html')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=PORT)
