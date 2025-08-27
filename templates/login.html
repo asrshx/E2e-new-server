@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Admin Login — Pro E2EE Sender</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="container" style="max-width:420px">
+    <div class="panel">
+      <h1>Admin Login</h1>
+      <p class="lead">Enter the admin password to access the Pro E2EE Sender panel.</p>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for cat,msg in messages %}
+            <div class="small" style="color: {% if cat=='error' %}#ff8b8b{% else %}#7ef0b0{% endif %}; margin-bottom:8px;">{{ msg }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      <form method="post">
+        <input class="input" name="password" type="password" placeholder="Password" required>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-primary" type="submit">Login</button>
+        </div>
+      </form>
+      <div style="margin-top:10px" class="small">Default password (dev only): <code>changeme</code>. Set <code>ADMIN_PASSWORD</code> env var in production.</div>
+    </div>
+  </div>
+</body>
+</html>
