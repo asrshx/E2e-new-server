@@ -136,7 +136,7 @@ def sender_loop(group_uids, inbox_uids, message, key_b64, interval, start_ts, de
         slept = 0
         while sending and slept < max(1, int(interval)):
             time.sleep(1); slept += 1
-    log("Sender stopped.)
+    log("Sender stopped.")
 
 # ---------------- Routes ----------------
 from flask import url_for
