@@ -141,17 +141,9 @@ def sender_loop(group_uids, inbox_uids, message, key_b64, interval, start_ts, de
 # ---------------- Routes ----------------
 from flask import url_for
 
-@app.route('/')
-def index():
-    if not require_login():
-        return redirect(url_for('login'))
-    return render_template('index.html')
-
 @app.route('/start', methods=['POST'])
 def start():
     global sending, sender_thread
-    if not require_login():
-        return redirect(url_for('login'))
 
     if sending:
         flash("Already running. Stop first.", "error")
