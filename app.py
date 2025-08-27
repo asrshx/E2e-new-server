@@ -12,7 +12,6 @@ from Crypto.Random import get_random_bytes
 
 # ---------------- Config ----------------
 APP_SECRET = os.environ.get("APP_SECRET", "pro-e2ee-secret")   # change in production
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")  # change immediately on deploy
 PORT = int(os.environ.get("PORT", 5000))
 
 # ---------------- App init ----------------
@@ -137,29 +136,7 @@ def sender_loop(group_uids, inbox_uids, message, key_b64, interval, start_ts, de
         slept = 0
         while sending and slept < max(1, int(interval)):
             time.sleep(1); slept += 1
-    log("Sender stopped.")
-
-# ---------------- Simple auth ----------------
-def require_login():
-    return session.get("logged_in", False)
-
-@app.route('/login', methods=['GET','POST'])
-def login():
-    if request.method == 'POST':
-        pwd = request.form.get('password','')
-        if pwd == ADMIN_PASSWORD:
-            session['logged_in'] = True
-            flash("Login successful", "success")
-            return redirect(url_for('index'))
-        else:
-            flash("Wrong password", "error")
-            return redirect(url_for('login'))
-    return render_template('login.html')
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('login'))
+    log("Sender stopped.)
 
 # ---------------- Routes ----------------
 from flask import url_for
